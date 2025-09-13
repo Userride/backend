@@ -9,10 +9,10 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 require('dotenv').config();
 
-const CLIENT_URL = process.env.CLIENT_URL_LOCAL;
-const SERVER_URL = process.env.SERVER_URL;
+const CLIENT_URL = process.env.CLIENT_URL_LOCAL;  // e.g. http://localhost:3000
+const SERVER_URL = process.env.SERVER_URL;        // e.g. http://localhost:5000
 
-// ================= NODEMAILER =================
+// ================= Nodemailer setup =================
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT || 587),
@@ -20,54 +20,47 @@ const transporter = nodemailer.createTransport({
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
 });
 
-// ================= GOOGLE LOGIN ================= ✅
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: `${SERVER_URL}/api/auth/google/callback`
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      try {
-        let user = await User.findOne({ email: profile.emails[0].value });
+// ================= GOOGLE LOGIN =================
+passport.use(new GoogleStrategy(
+  {
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: `${SERVER_URL}/api/auth/google/callback`
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      let user = await User.findOne({ email: profile.emails[0].value });
 
-        if (!user) {
-          // ✅ Create new user with googleId
-          user = new User({
-            name: profile.displayName,
-            email: profile.emails[0].value,
-            googleId: profile.id,   // ✅ save googleId
-            password: null,
-            isVerified: true,
-            verifyToken: null
-          });
-          await user.save();
-        } else if (!user.googleId) {
-          // ✅ If user exists but didn't have googleId before, update it
-          user.googleId = profile.id;
-          user.isVerified = true;
-          await user.save();
-        }
-
-        const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-          expiresIn: '1d'
+      if (!user) {
+        user = new User({
+          name: profile.displayName,
+          email: profile.emails[0].value,
+          googleId: profile.id,          // ✅ store googleId
+          password: undefined,           // ✅ not needed for Google
+          isVerified: true,
+          verifyToken: null
         });
-        return done(null, { token });
-      } catch (err) {
-        return done(err, null);
+        await user.save();
       }
+
+      const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
+      return done(null, { token });
+    } catch (err) {
+      return done(err, null);
     }
-  )
-);
+  }
+));
 
 // Start Google OAuth
-router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+router.get(
+  '/google',
+  passport.authenticate('google', { scope: ['profile', 'email'], session: false }) // ✅
+);
 
 // Google callback
 router.get(
   '/google/callback',
-  passport.authenticate('google', { failureRedirect: `${CLIENT_URL}/login` }),
+  passport.authenticate('google', { failureRedirect: `${CLIENT_URL}/login`, session: false }), // ✅
   (req, res) => {
     const token = req.user.token;
     return res.redirect(`${CLIENT_URL}/login?token=${token}`);
@@ -136,7 +129,7 @@ router.post('/login', async (req, res) => {
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
     if (!user.isVerified) return res.status(403).json({ message: 'Please verify your email first' });
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await bcrypt.compare(password, user.password || '');
     if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
