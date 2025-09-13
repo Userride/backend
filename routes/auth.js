@@ -5,14 +5,14 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
-const passport = require('passport');  // ✅
-const GoogleStrategy = require('passport-google-oauth20').Strategy; // ✅
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 require('dotenv').config();
 
-const CLIENT_URL =  process.env.CLIENT_URL_LOCAL;
+const CLIENT_URL = process.env.CLIENT_URL_LOCAL;
 const SERVER_URL = process.env.SERVER_URL;
 
-// Nodemailer setup
+// ================= NODEMAILER =================
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT || 587),
@@ -21,35 +21,45 @@ const transporter = nodemailer.createTransport({
 });
 
 // ================= GOOGLE LOGIN ================= ✅
-passport.use(new GoogleStrategy(
-  {
-    clientID: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: `${SERVER_URL}/api/auth/google/callback`
-  },
-  async (accessToken, refreshToken, profile, done) => {
-    try {
-      let user = await User.findOne({ email: profile.emails[0].value });
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: `${SERVER_URL}/api/auth/google/callback`
+    },
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        let user = await User.findOne({ email: profile.emails[0].value });
 
-      if (!user) {
-        // Create new user if not found
-        user = new User({
-          name: profile.displayName,
-          email: profile.emails[0].value,
-          password: null,
-          isVerified: true, // Google already verifies emails
-          verifyToken: null
+        if (!user) {
+          // ✅ Create new user with googleId
+          user = new User({
+            name: profile.displayName,
+            email: profile.emails[0].value,
+            googleId: profile.id,   // ✅ save googleId
+            password: null,
+            isVerified: true,
+            verifyToken: null
+          });
+          await user.save();
+        } else if (!user.googleId) {
+          // ✅ If user exists but didn't have googleId before, update it
+          user.googleId = profile.id;
+          user.isVerified = true;
+          await user.save();
+        }
+
+        const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+          expiresIn: '1d'
         });
-        await user.save();
+        return done(null, { token });
+      } catch (err) {
+        return done(err, null);
       }
-
-      const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
-      return done(null, { token });
-    } catch (err) {
-      return done(err, null);
     }
-  }
-));
+  )
+);
 
 // Start Google OAuth
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
