@@ -86,7 +86,38 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
     </html>
   `;
 
-  // Check if SMTP is configured
+  // Try Resend HTTP API first (bypasses Render SMTP port blocking)
+  if (config.resendApiKey) {
+    console.log(`[Email Service] Attempting to send email via Resend API to: ${recipients.join(', ')}`);
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.resendApiKey}`,
+        },
+        body: JSON.stringify({
+          from: config.smtpFrom || 'onboarding@resend.dev',
+          to: recipients,
+          subject: 'Career Copilot: Your Real-Time Job Recommendations',
+          html: emailHtml,
+        }),
+      });
+
+      if (response.ok) {
+        const resData = await response.json();
+        console.log(`[Email Service] Email successfully sent via Resend: ${resData.id}`);
+        return true;
+      } else {
+        const errText = await response.text();
+        console.error(`[Email Service] Resend API failed: ${errText}`);
+      }
+    } catch (err) {
+      console.error(`[Email Service] Failed to send email via Resend: ${err.message}`);
+    }
+  }
+
+  // Fallback to SMTP if configured
   if (config.smtpUser && config.smtpPass) {
     try {
       const transporter = nodemailer.createTransport({
@@ -106,7 +137,7 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
         html: emailHtml,
       });
 
-      console.log(`[Email Service] Email successfully sent: ${info.messageId}`);
+      console.log(`[Email Service] Email successfully sent via SMTP: ${info.messageId}`);
       return true;
     } catch (err) {
       console.error(`[Email Service] Failed to send email via SMTP: ${err.message}`);
