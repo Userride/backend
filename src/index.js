@@ -56,19 +56,72 @@ app.get('/api/health/test-email', async (req, res) => {
   if (!recipient) {
     return res.status(400).json({
       status: 'error',
-      message: 'No recipient email specified and SMTP_USER is not configured.',
+      message: 'No recipient email specified, and SMTP_USER is not configured.',
     });
   }
 
-  const smtpConfigSummary = {
-    host: config.smtpHost,
-    port: config.smtpPort,
-    secure: config.smtpPort === 465,
-    user: config.smtpUser ? `${config.smtpUser.substring(0, 3)}...` : 'not-configured',
-    passSet: !!config.smtpPass,
+  const configSummary = {
+    resendApiKeySet: !!config.resendApiKey,
+    smtpHost: config.smtpHost,
+    smtpPort: config.smtpPort,
+    smtpUser: config.smtpUser ? `${config.smtpUser.substring(0, 3)}...` : 'not-configured',
+    smtpPassSet: !!config.smtpPass,
     from: config.smtpFrom,
   };
 
+  // Try Resend HTTP API first if key is configured
+  if (config.resendApiKey) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.resendApiKey}`,
+        },
+        body: JSON.stringify({
+          from: config.smtpFrom || 'onboarding@resend.dev',
+          to: [recipient],
+          subject: 'Career Copilot - Resend API Configuration Test',
+          html: `
+            <h3>Career Copilot Resend API Test</h3>
+            <p>If you received this email, your Resend API integration is working perfectly!</p>
+            <p><strong>Config Details:</strong></p>
+            <ul>
+              <li>Sender: ${config.smtpFrom || 'onboarding@resend.dev'}</li>
+              <li>Recipient: ${recipient}</li>
+              <li>Method: Resend HTTP API (Port 443)</li>
+            </ul>
+          `,
+        }),
+      });
+
+      const resData = await response.json();
+
+      if (response.ok) {
+        return res.json({
+          status: 'success',
+          message: `Test email sent successfully via Resend API to ${recipient}`,
+          id: resData.id,
+          config: configSummary,
+        });
+      } else {
+        return res.status(500).json({
+          status: 'error',
+          message: `Resend API failed: ${JSON.stringify(resData)}`,
+          config: configSummary,
+        });
+      }
+    } catch (err) {
+      return res.status(500).json({
+        status: 'error',
+        message: `Failed to send email via Resend API: ${err.message}`,
+        errorDetails: err.stack,
+        config: configSummary,
+      });
+    }
+  }
+
+  // Fallback to traditional SMTP
   try {
     const transporter = nodemailer.createTransport({
       host: config.smtpHost,
@@ -89,31 +142,33 @@ app.get('/api/health/test-email', async (req, res) => {
       subject: 'Career Copilot - SMTP Configuration Test',
       html: `
         <h3>Career Copilot SMTP Test</h3>
-        <p>If you received this email, your SMTP settings on Render are working perfectly!</p>
+        <p>If you received this email, your SMTP settings are working perfectly!</p>
         <p><strong>Config Details:</strong></p>
         <ul>
           <li>Host: ${config.smtpHost}</li>
           <li>Port: ${config.smtpPort}</li>
           <li>Sender: ${config.smtpFrom}</li>
           <li>Recipient: ${recipient}</li>
+          <li>Method: Nodemailer SMTP</li>
         </ul>
       `,
     });
 
     res.json({
       status: 'success',
-      message: `Test email sent successfully to ${recipient}`,
+      message: `Test email sent successfully via SMTP to ${recipient}`,
       messageId: info.messageId,
       response: info.response,
-      smtpConfig: smtpConfigSummary,
+      config: configSummary,
     });
   } catch (err) {
     console.error('[SMTP Test Error]', err);
     res.status(500).json({
       status: 'error',
-      message: `Failed to send email: ${err.message}`,
+      message: `Failed to send email via SMTP: ${err.message}`,
+      hint: 'Note that Render Free Tier blocks outbound SMTP traffic. If deploying on Render Free Tier, please configure RESEND_API_KEY instead.',
       errorDetails: err.stack,
-      smtpConfig: smtpConfigSummary,
+      config: configSummary,
     });
   }
 });
