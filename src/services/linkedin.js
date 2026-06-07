@@ -6,22 +6,26 @@ export async function scrapeLinkedInJobs({ skills, roles, locations, experienceL
   const queryParts = [];
   
   if (roles && roles.length > 0) {
-    // Group roles in OR if multiple
-    const roleQuery = roles.length > 1 ? `(${roles.map(r => `"${r}"`).join(' OR ')})` : roles[0];
-    queryParts.push(roleQuery);
+    // Use the first role to keep it broad for guest postings API
+    queryParts.push(roles[0]);
   }
   
-  if (experienceLevel) {
-    queryParts.push(experienceLevel);
-  }
-
   if (skills && skills.length > 0) {
-    // Take top 3 skills to make the query specific but not too narrow
-    queryParts.push(skills.slice(0, 3).join(' '));
+    // Use the first skill to filter but keep it relatively broad
+    queryParts.push(skills[0]);
   }
   
   const query = queryParts.join(' ') || 'Software Engineer';
-  const location = (locations && locations.length > 0) ? locations.join(', ') : 'Worldwide';
+  
+  let location = 'Worldwide';
+  if (locations && locations.length > 0) {
+    const locCleaned = locations.map(loc => {
+      let l = loc.trim();
+      if (l.toLowerCase() === 'indian' || l.toLowerCase() === 'india') return 'India';
+      return l;
+    });
+    location = locCleaned.join(', ');
+  }
 
   const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&start=0`;
   
