@@ -72,6 +72,13 @@ app.get('/api/health/test-email', async (req, res) => {
   // Try Resend HTTP API first if key is configured
   if (config.resendApiKey) {
     try {
+      // Resend does NOT allow free email provider domains as senders (gmail, yahoo, etc.)
+      // Only verified custom domains OR onboarding@resend.dev are allowed.
+      const freeEmailDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'career-copilot.com'];
+      const smtpFromLower = (config.smtpFrom || '').toLowerCase();
+      const isUnverifiedSender = !config.smtpFrom || freeEmailDomains.some(d => smtpFromLower.includes(d));
+      const resendFrom = isUnverifiedSender ? 'Career Copilot <onboarding@resend.dev>' : config.smtpFrom;
+
       const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -79,7 +86,7 @@ app.get('/api/health/test-email', async (req, res) => {
           'Authorization': `Bearer ${config.resendApiKey}`,
         },
         body: JSON.stringify({
-          from: config.smtpFrom || 'onboarding@resend.dev',
+          from: resendFrom,
           to: [recipient],
           subject: 'Career Copilot - Resend API Configuration Test',
           html: `
@@ -87,7 +94,7 @@ app.get('/api/health/test-email', async (req, res) => {
             <p>If you received this email, your Resend API integration is working perfectly!</p>
             <p><strong>Config Details:</strong></p>
             <ul>
-              <li>Sender: ${config.smtpFrom || 'onboarding@resend.dev'}</li>
+              <li>Sender: ${resendFrom}</li>
               <li>Recipient: ${recipient}</li>
               <li>Method: Resend HTTP API (Port 443)</li>
             </ul>
