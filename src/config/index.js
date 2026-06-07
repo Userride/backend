@@ -22,4 +22,5 @@ export const config = {
   smtpUser: process.env.SMTP_USER,
   smtpPass: process.env.SMTP_PASS,
   smtpFrom: process.env.SMTP_FROM || 'Career Copilot <noreply@career-copilot.com>',
+  resendApiKey: process.env.RESEND_API_KEY,
 };
