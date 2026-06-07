@@ -50,6 +50,29 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+/**
+ * Parses a sender address like "Name <email@domain.com>" or "email@domain.com"
+ * into a structured { name, email } object suitable for Brevo.
+ */
+function parseSender(smtpFrom) {
+  if (!smtpFrom) {
+    return { name: 'Career Copilot', email: 'onboarding@brevo.com' };
+  }
+  
+  const match = smtpFrom.match(/^(.*?)\s*<(.*?)>$/);
+  if (match) {
+    return {
+      name: match[1].trim() || 'Career Copilot',
+      email: match[2].trim()
+    };
+  }
+  
+  return {
+    name: 'Career Copilot',
+    email: smtpFrom.trim()
+  };
+}
+
 app.get('/api/health/test-email', async (req, res) => {
   const recipient = req.query.to || config.smtpUser;
   
@@ -62,6 +85,7 @@ app.get('/api/health/test-email', async (req, res) => {
 
   const configSummary = {
     resendApiKeySet: !!config.resendApiKey,
+    brevoApiKeySet: !!config.brevoApiKey,
     smtpHost: config.smtpHost,
     smtpPort: config.smtpPort,
     smtpUser: config.smtpUser ? `${config.smtpUser.substring(0, 3)}...` : 'not-configured',
@@ -69,7 +93,61 @@ app.get('/api/health/test-email', async (req, res) => {
     from: config.smtpFrom,
   };
 
-  // Try Resend HTTP API first if key is configured
+  // Try Brevo HTTP API first if key is configured
+  if (config.brevoApiKey) {
+    try {
+      const parsedSender = parseSender(config.smtpFrom || config.smtpUser);
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': config.brevoApiKey,
+          'accept': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: parsedSender,
+          to: [{ email: recipient }],
+          subject: 'Career Copilot - Brevo API Configuration Test',
+          htmlContent: `
+            <h3>Career Copilot Brevo API Test</h3>
+            <p>If you received this email, your Brevo API integration is working perfectly!</p>
+            <p><strong>Config Details:</strong></p>
+            <ul>
+              <li>Sender: ${parsedSender.name} &lt;${parsedSender.email}&gt;</li>
+              <li>Recipient: ${recipient}</li>
+              <li>Method: Brevo HTTP API (Port 443)</li>
+            </ul>
+          `,
+        }),
+      });
+
+      const resData = await response.json();
+
+      if (response.ok) {
+        return res.json({
+          status: 'success',
+          message: `Test email sent successfully via Brevo API to ${recipient}`,
+          messageId: resData.messageId,
+          config: configSummary,
+        });
+      } else {
+        return res.status(500).json({
+          status: 'error',
+          message: `Brevo API failed: ${JSON.stringify(resData)}`,
+          config: configSummary,
+        });
+      }
+    } catch (err) {
+      return res.status(500).json({
+        status: 'error',
+        message: `Failed to send email via Brevo API: ${err.message}`,
+        errorDetails: err.stack,
+        config: configSummary,
+      });
+    }
+  }
+
+  // Try Resend HTTP API next if key is configured
   if (config.resendApiKey) {
     try {
       // Resend does NOT allow free email provider domains as senders (gmail, yahoo, etc.)
