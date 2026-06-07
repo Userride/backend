@@ -14,6 +14,11 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
 
   console.log(`[Email Service] Preparing job match alert for: ${recipients.join(', ')}`);
 
+  if (!recipients.length) {
+    console.warn('[Email Service] No recipient email found. Skipping email.');
+    return;
+  }
+
   if (!matches || matches.length === 0) {
     console.warn('[Email Service] No job matches to email.');
     return;
@@ -53,7 +58,7 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); padding: 32px 24px; text-align: center; color: #ffffff;">
             <h1 style="margin: 0 0 8px 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Career Copilot</h1>
-            <p style="margin: 0; font-size: 15px; opacity: 0.9;">Real-Time LinkedIn Job Matches & Recommendations</p>
+            <p style="margin: 0; font-size: 15px; opacity: 0.9;">Real-Time LinkedIn Job Matches &amp; Recommendations</p>
           </div>
           
           <!-- Body -->
@@ -86,10 +91,18 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
     </html>
   `;
 
-  // Try Resend HTTP API first (bypasses Render SMTP port blocking)
+  // ── 1. Try Resend HTTP API (bypasses Render SMTP port blocking on free tier) ──
   if (config.resendApiKey) {
     console.log(`[Email Service] Attempting to send email via Resend API to: ${recipients.join(', ')}`);
     try {
+      // Resend free plan only allows sending FROM onboarding@resend.dev
+      // unless you have a verified custom domain configured in Resend dashboard.
+      // If SMTP_FROM contains a custom domain that IS verified on Resend, use it.
+      // Otherwise fall back to onboarding@resend.dev.
+      const resendFrom = (config.smtpFrom && !config.smtpFrom.includes('career-copilot.com'))
+        ? config.smtpFrom
+        : 'Career Copilot <onboarding@resend.dev>';
+
       const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -97,7 +110,7 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
           'Authorization': `Bearer ${config.resendApiKey}`,
         },
         body: JSON.stringify({
-          from: config.smtpFrom || 'onboarding@resend.dev',
+          from: resendFrom,
           to: recipients,
           subject: 'Career Copilot: Your Real-Time Job Recommendations',
           html: emailHtml,
@@ -106,19 +119,23 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
 
       if (response.ok) {
         const resData = await response.json();
-        console.log(`[Email Service] Email successfully sent via Resend: ${resData.id}`);
+        console.log(`[Email Service] ✅ Email successfully sent via Resend API. ID: ${resData.id}`);
         return true;
       } else {
         const errText = await response.text();
-        console.error(`[Email Service] Resend API failed: ${errText}`);
+        console.error(`[Email Service] ❌ Resend API rejected the request (HTTP ${response.status}): ${errText}`);
+        console.error('[Email Service] Common causes: invalid API key, unverified sender domain, or recipient not whitelisted on test mode.');
       }
     } catch (err) {
-      console.error(`[Email Service] Failed to send email via Resend: ${err.message}`);
+      console.error(`[Email Service] ❌ Network error calling Resend API: ${err.message}`);
     }
+  } else {
+    console.warn('[Email Service] ⚠️  RESEND_API_KEY is not configured. Skipping Resend API.');
   }
 
-  // Fallback to SMTP if configured
+  // ── 2. Fallback: Gmail/SMTP (NOTE: Render Free Tier BLOCKS outbound SMTP on 465/587) ──
   if (config.smtpUser && config.smtpPass) {
+    console.log(`[Email Service] Attempting to send via SMTP (${config.smtpHost}:${config.smtpPort})...`);
     try {
       const transporter = nodemailer.createTransport({
         host: config.smtpHost,
@@ -137,15 +154,21 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
         html: emailHtml,
       });
 
-      console.log(`[Email Service] Email successfully sent via SMTP: ${info.messageId}`);
+      console.log(`[Email Service] ✅ Email successfully sent via SMTP. Message ID: ${info.messageId}`);
       return true;
     } catch (err) {
-      console.error(`[Email Service] Failed to send email via SMTP: ${err.message}`);
+      console.error(`[Email Service] ❌ SMTP send failed: ${err.message}`);
+      if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+        console.error('[Email Service] ⚠️  Render Free Tier blocks outbound SMTP ports (465/587). Configure RESEND_API_KEY instead.');
+      }
     }
+  } else {
+    console.warn('[Email Service] ⚠️  SMTP_USER / SMTP_PASS not configured. Skipping SMTP fallback.');
   }
 
-  // Fallback: Write to console and local file for debugging
-  console.log('[Email Service] SMTP Credentials missing or invalid. Writing email content to local debug files...');
+  // ── 3. Last resort: write to debug file (useful in local dev only) ──
+  console.warn('[Email Service] ⚠️  No email provider configured. Email was NOT sent to user.');
+  console.warn('[Email Service] 👉 To fix: Set RESEND_API_KEY in your Render environment variables (https://resend.com/api-keys).');
   try {
     const dir = path.join(process.cwd(), 'logs');
     if (!fs.existsSync(dir)) {
@@ -153,7 +176,7 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
     }
     const filePath = path.join(dir, `job-email-${Date.now()}.html`);
     fs.writeFileSync(filePath, emailHtml, 'utf8');
-    console.log(`[Email Service] Debug email HTML saved to: ${filePath}`);
+    console.log(`[Email Service] Debug email HTML saved locally to: ${filePath}`);
   } catch (err) {
     console.error(`[Email Service] Failed to write debug email file: ${err.message}`);
   }
