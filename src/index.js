@@ -8,6 +8,7 @@ import { initVectorStore } from './services/vectorStore.js';
 import authRoutes from './routes/auth.js';
 import analysisRoutes from './routes/analysis.js';
 import jobRoutes from './routes/jobs.js';
+import nodemailer from 'nodemailer';
 
 const app = express();
 
@@ -47,6 +48,74 @@ app.get('/api/health', (_req, res) => {
     llmConfigured: !!(config.groqApiKey || config.openaiApiKey || config.geminiApiKey),
     timestamp: new Date().toISOString(),
   });
+});
+
+app.get('/api/health/test-email', async (req, res) => {
+  const recipient = req.query.to || config.smtpUser;
+  
+  if (!recipient) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'No recipient email specified and SMTP_USER is not configured.',
+    });
+  }
+
+  const smtpConfigSummary = {
+    host: config.smtpHost,
+    port: config.smtpPort,
+    secure: config.smtpPort === 465,
+    user: config.smtpUser ? `${config.smtpUser.substring(0, 3)}...` : 'not-configured',
+    passSet: !!config.smtpPass,
+    from: config.smtpFrom,
+  };
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: config.smtpHost,
+      port: config.smtpPort,
+      secure: config.smtpPort === 465,
+      auth: {
+        user: config.smtpUser,
+        pass: config.smtpPass,
+      },
+    });
+
+    // Verify transporter connection
+    await transporter.verify();
+
+    const info = await transporter.sendMail({
+      from: config.smtpFrom,
+      to: recipient,
+      subject: 'Career Copilot - SMTP Configuration Test',
+      html: `
+        <h3>Career Copilot SMTP Test</h3>
+        <p>If you received this email, your SMTP settings on Render are working perfectly!</p>
+        <p><strong>Config Details:</strong></p>
+        <ul>
+          <li>Host: ${config.smtpHost}</li>
+          <li>Port: ${config.smtpPort}</li>
+          <li>Sender: ${config.smtpFrom}</li>
+          <li>Recipient: ${recipient}</li>
+        </ul>
+      `,
+    });
+
+    res.json({
+      status: 'success',
+      message: `Test email sent successfully to ${recipient}`,
+      messageId: info.messageId,
+      response: info.response,
+      smtpConfig: smtpConfigSummary,
+    });
+  } catch (err) {
+    console.error('[SMTP Test Error]', err);
+    res.status(500).json({
+      status: 'error',
+      message: `Failed to send email: ${err.message}`,
+      errorDetails: err.stack,
+      smtpConfig: smtpConfigSummary,
+    });
+  }
 });
 
 app.use('/api/auth', authRoutes);
