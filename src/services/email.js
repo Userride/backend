@@ -4,6 +4,29 @@ import fs from 'fs';
 import path from 'path';
 
 /**
+ * Parses a sender address like "Name <email@domain.com>" or "email@domain.com"
+ * into a structured { name, email } object suitable for Brevo.
+ */
+function parseSender(smtpFrom) {
+  if (!smtpFrom) {
+    return { name: 'Career Copilot', email: 'onboarding@brevo.com' };
+  }
+  
+  const match = smtpFrom.match(/^(.*?)\s*<(.*?)>$/);
+  if (match) {
+    return {
+      name: match[1].trim() || 'Career Copilot',
+      email: match[2].trim()
+    };
+  }
+  
+  return {
+    name: 'Career Copilot',
+    email: smtpFrom.trim()
+  };
+}
+
+/**
  * Sends a job alert email containing matched jobs.
  * @param {string} userEmail - User's email
  * @param {object} profile - Parsed resume profile
@@ -93,7 +116,45 @@ export async function sendJobMatchesEmail(userEmail, profile, matches) {
     </html>
   `;
 
-  // ── 1. Try Resend HTTP API (bypasses Render SMTP port blocking on free tier) ──
+  // ── 1. Try Brevo HTTP API (recommended for free tier as it has no domain restrictions for recipients) ──
+  if (config.brevoApiKey) {
+    console.log(`[Email Service] Attempting to send email via Brevo API to: ${recipients.join(', ')}`);
+    try {
+      const parsedSender = parseSender(config.smtpFrom || config.smtpUser);
+      console.log(`[Email Service] Using sender for Brevo: ${parsedSender.name} <${parsedSender.email}>`);
+
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': config.brevoApiKey,
+          'accept': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: parsedSender,
+          to: recipients.map(email => ({ email })),
+          subject: 'Career Copilot: Your Real-Time Job Recommendations',
+          htmlContent: emailHtml,
+        }),
+      });
+
+      if (response.ok) {
+        const resData = await response.json();
+        console.log(`[Email Service] ✅ Email successfully sent via Brevo API. Message ID: ${resData.messageId}`);
+        return true;
+      } else {
+        const errText = await response.text();
+        console.error(`[Email Service] ❌ Brevo API rejected the request (HTTP ${response.status}): ${errText}`);
+        console.error('[Email Service] Common causes: invalid Brevo API key, or sender email is not registered/verified in Brevo.');
+      }
+    } catch (err) {
+      console.error(`[Email Service] ❌ Network error calling Brevo API: ${err.message}`);
+    }
+  } else {
+    console.log('[Email Service] BREVO_API_KEY is not configured. Skipping Brevo API.');
+  }
+
+  // ── 2. Try Resend HTTP API (bypasses Render SMTP port blocking on free tier) ──
   if (config.resendApiKey) {
     console.log(`[Email Service] Attempting to send email via Resend API to: ${recipients.join(', ')}`);
     try {
